@@ -11,16 +11,11 @@ from telebot.apihelper import ApiTelegramException
 from cachetools import TTLCache
 
 import database
-from api_manager import ApiKeyManager  # Import the new manager
+from api_manager import ApiKeyManager
 
 # --- CONFIGURATION AND LOGGING SETUP ---
-config = configparser.ConfigParser(interpolation=None) # <-- Add this
-try:
-    config.read_file(open('config.ini'))
-except FileNotFoundError:
-    print("FATAL: config.ini not found. Please create it. Exiting.")
-    exit()
-
+config = configparser.ConfigParser(interpolation=None)
+config.read_file(open('config.ini'))
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', handlers=[logging.FileHandler("bot.log"), logging.StreamHandler()])
 logger = logging.getLogger(__name__)
 
@@ -37,29 +32,27 @@ except KeyError as e:
 
 # --- INITIALIZATION ---
 bot = telebot.TeleBot(BOT_TOKEN)
-key_manager = ApiKeyManager()  # Instantiate the API key manager
+key_manager = ApiKeyManager()
 cash_reports = TTLCache(maxsize=500, ttl=3600)
 user_timestamps = {}
 
 # --- CONSTANTS ---
 CALLBACK_PREFIX_PAGE = "/page "
 CALLBACK_DELETE = "/delete"
-USER_COOLDOWN = 3
+PREMIUM_COOLDOWN = 3
+TRIAL_COOLDOWN = 1800
 MAX_MESSAGE_LENGTH = 4096
 BROADCAST_SLEEP_TIME = 0.1
 
 # --- HELPER FUNCTIONS ---
 def generate_report(query: str, query_id: int) -> tuple[list | None, str | None]:
     api_key_to_use = key_manager.get_next_key()
-
     if not api_key_to_use:
         logger.error("No available API keys to process a request.")
         return None, "The bot is not configured with any API keys. Please contact an admin."
-
     logger.info(f"Making request for query '{query}' with a rotated API key.")
     data = {"token": api_key_to_use, "request": query.split("\n")[0], "limit": LIMIT, "lang": LANG}
     try:
-        # (Rest of the function is the same as before)
         response = requests.post(API_URL, json=data, timeout=30)
         response.raise_for_status()
         response_json = response.json()
@@ -103,29 +96,60 @@ def create_inline_keyboard(query_id: int, page_id: int, count_page: int) -> Inli
     markup.row(InlineKeyboardButton(text="🗑️ Delete", callback_data=CALLBACK_DELETE))
     return markup
 
+
 # --- TELEGRAM BOT HANDLERS ---
-# (/start, /help, /status, /add, /broadcast handlers remain the same)
-@bot.message_handler(commands=["start", "help"])
+
+@bot.message_handler(commands=["start"])
 def send_welcome(message: Message):
+    """Handles the /start command with a brief welcome message."""
     welcome_text = (
         "<b>Welcome to the LeakOsint Bot!</b>\n\n"
-        "This bot allows you to search for data in public leaks.\n"
-        "To use the bot, you need an active subscription.\n\n"
-        "<b>Commands:</b>\n"
-        "/status - Check your current subscription status.\n"
-        "/help - Show this message again."
+        "This bot helps you find data in public leaks. You need an active subscription to use it.\n\n"
+        "To see a list of all available commands, please use /help."
     )
     bot.reply_to(message, welcome_text, parse_mode="html")
+
+### --- MODIFIED /help COMMAND --- ###
+@bot.message_handler(commands=["help"])
+def send_help(message: Message):
+    """Shows a full list of commands, with special commands visible only to admins."""
+    user_id = message.from_user.id
+    
+    # Base help text for all users
+    help_text = (
+        "<b>Here is a list of available commands:</b>\n\n"
+        "<b><u>User Commands</u></b>\n"
+        "• `/start` - Get the welcome message.\n"
+        "• `/help` - Show this command list.\n"
+        "• `/status` - Check your subscription status and expiry date."
+    )
+
+    # If the user is an admin, add the admin commands section
+    if user_id in ADMIN_IDS:
+        admin_help_text = (
+            "\n\n"
+            "<b><u>Admin Commands</u></b>\n"
+            "• `/add <user_id> <days>` - Grant a user a premium subscription.\n"
+            "• `/trial <user_id> <hours>` - Grant a user a temporary trial.\n"
+            "• `/addapi <key1>,<key2>` - Add new API keys to the active pool.\n"
+            "• `/broadcast` (as reply) - Send the replied-to message to all subscribers."
+        )
+        help_text += admin_help_text
+
+    bot.reply_to(message, help_text, parse_mode="html")
 
 @bot.message_handler(commands=["status"])
 def check_status(message: Message):
     user_id = message.from_user.id
-    expiry_date = database.get_user_subscription(user_id)
-    if expiry_date and expiry_date > datetime.now():
+    subscription_info = database.get_user_subscription(user_id)
+    
+    if subscription_info and subscription_info["expiry_date"] > datetime.now():
+        plan_type = subscription_info.get("plan_type", "premium").title()
+        expiry_date = subscription_info["expiry_date"]
         days_left = (expiry_date - datetime.now()).days
-        bot.reply_to(message, f"✅ Your subscription is active.\nIt expires on: {expiry_date.strftime('%Y-%m-%d')}. ({days_left} days left).")
+        bot.reply_to(message, f"✅ Your **{plan_type} Plan** is active.\nIt expires on: {expiry_date.strftime('%Y-%m-%d %H:%M')}. ({days_left} days left).")
     else:
-        bot.reply_to(message, "❌ You do not have an active subscription. Please contact an admin to get access.")
+        bot.reply_to(message, "❌ You do not have an active subscription. Please contact the admin to get access.")
 
 @bot.message_handler(commands=["add"])
 def add_user(message: Message):
@@ -136,40 +160,50 @@ def add_user(message: Message):
         if len(parts) != 3: raise ValueError
         user_id_to_add, days = int(parts[1]), int(parts[2])
         expiry_date = datetime.now() + timedelta(days=days)
-        database.add_or_update_user(user_id_to_add, expiry_date)
-        success_message = f"✅ Success!\nUser `{user_id_to_add}` now has access for *{days} days*.\nExpires on: `{expiry_date.strftime('%Y-%m-%d')}`."
+        database.add_or_update_user(user_id_to_add, expiry_date, plan_type="premium")
+        success_message = f"✅ Success!\nUser `{user_id_to_add}` now has a **Premium Plan** for *{days} days*.\nExpires on: `{expiry_date.strftime('%Y-%m-%d %H:%M')}`."
         bot.reply_to(message, success_message, parse_mode="Markdown")
         try:
-            bot.send_message(user_id_to_add, f"🎉 Great news! An admin has granted you access for {days} days. Use /status to see your expiry date.")
+            bot.send_message(user_id_to_add, f"🎉 Great news! An admin has granted you a Premium subscription for {days} days.")
         except Exception as e:
             logger.warning(f"Could not notify user {user_id_to_add}: {e}")
     except (ValueError, IndexError):
         bot.reply_to(message, "⚠️ Invalid format. Use: `/add <user_id> <days>`")
 
-### --- NEW /addapi COMMAND --- ###
+@bot.message_handler(commands=['trial'])
+def add_trial_user(message: Message):
+    admin_id = message.from_user.id
+    if admin_id not in ADMIN_IDS: return
+    try:
+        parts = message.text.split()
+        if len(parts) != 3: raise ValueError
+        user_id_to_add, hours = int(parts[1]), int(parts[2])
+        expiry_date = datetime.now() + timedelta(hours=hours)
+        database.add_or_update_user(user_id_to_add, expiry_date, plan_type="trial")
+        success_message = f"✅ Success!\nUser `{user_id_to_add}` now has a **Trial Plan** for *{hours} hour(s)*.\nExpires on: `{expiry_date.strftime('%Y-%m-%d %H:%M')}`."
+        bot.reply_to(message, success_message, parse_mode="Markdown")
+        try:
+            bot.send_message(user_id_to_add, f"🎉 You have been granted a trial subscription for {hours} hour(s)! Trial users can make one request every 30 minutes.")
+        except Exception as e:
+            logger.warning(f"Could not notify user {user_id_to_add}: {e}")
+    except (ValueError, IndexError):
+        bot.reply_to(message, "⚠️ Invalid format. Use: `/trial <user_id> <hours>`")
+
 @bot.message_handler(commands=['addapi'])
 def add_api_keys_command(message: Message):
-    """Admin command to dynamically add new LeakOsint API keys."""
     admin_id = message.from_user.id
-    if admin_id not in ADMIN_IDS:
-        bot.reply_to(message, "⚠️ This command is for admins only.")
-        return
-
-    # Extract keys from the message text, e.g., "/addapi key1,key2,key3"
+    if admin_id not in ADMIN_IDS: return
     try:
         keys_string = message.text.split(maxsplit=1)[1]
         keys_to_add = [key.strip() for key in keys_string.split(',') if key.strip()]
     except IndexError:
         bot.reply_to(message, "⚠️ **Usage:** `/addapi <key1>,<key2>,...`\nPlease provide at least one key.")
         return
-
     if not keys_to_add:
         bot.reply_to(message, "⚠️ No valid keys found in your message.")
         return
-
     num_added = key_manager.add_keys(keys_to_add)
-    bot.reply_to(message, f"✅ Operation complete. Added **{num_added}** new API key(s) to the pool. The bot is now using the updated list.")
-
+    bot.reply_to(message, f"✅ Operation complete. Added **{num_added}** new API key(s) to the pool.")
 
 @bot.message_handler(commands=['broadcast'])
 def broadcast_message(message: Message):
@@ -197,15 +231,20 @@ def broadcast_message(message: Message):
 
 @bot.message_handler(content_types=['text'])
 def handle_message(message: Message):
-    # (This handler remains the same)
     user_id = message.from_user.id
-    expiry_date = database.get_user_subscription(user_id)
-    if not expiry_date or expiry_date < datetime.now():
-        bot.reply_to(message, "❌ Your subscription has expired or you don't have one. Please contact an admin. Use /status to check.")
+    subscription_info = database.get_user_subscription(user_id)
+    if not subscription_info or subscription_info["expiry_date"] < datetime.now():
+        bot.reply_to(message, "❌ Your subscription has expired or you don't have one. Please contact an admin.")
         return
+    plan_type = subscription_info.get("plan_type", "premium")
+    cooldown = TRIAL_COOLDOWN if plan_type == 'trial' else PREMIUM_COOLDOWN
     current_time = time.time()
-    if user_id in user_timestamps and (current_time - user_timestamps[user_id]) < USER_COOLDOWN:
-        bot.reply_to(message, f"Please wait {USER_COOLDOWN} seconds.")
+    if user_id in user_timestamps and (current_time - user_timestamps[user_id]) < cooldown:
+        time_left = cooldown - (current_time - user_timestamps[user_id])
+        if plan_type == 'trial':
+            bot.reply_to(message, f"⏳ Trial members are limited to one request every 30 minutes. Please wait another {round(time_left / 60)} minute(s).")
+        else:
+            bot.reply_to(message, f"Please wait {round(time_left)} seconds before your next request.")
         return
     user_timestamps[user_id] = current_time
     query_id = randint(0, 9_999_999)
@@ -226,7 +265,6 @@ def handle_message(message: Message):
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call: CallbackQuery):
-    # (This handler remains the same)
     if call.data.startswith(CALLBACK_PREFIX_PAGE):
         try: _, query_id_str, page_id_str = call.data.split(" "); page_id = int(page_id_str)
         except (ValueError, IndexError): return
@@ -251,3 +289,4 @@ if __name__ == '__main__':
         except Exception as e:
             logger.critical(f"An unhandled exception occurred in the polling loop: {e}", exc_info=True)
             time.sleep(5)
+            
