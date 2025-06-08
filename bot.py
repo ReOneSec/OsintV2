@@ -14,7 +14,7 @@ import database
 from api_manager import ApiKeyManager  # Import the new manager
 
 # --- CONFIGURATION AND LOGGING SETUP ---
-config = configparser.ConfigParser()
+config = configparser.ConfigParser(interpolation=None) # <-- Add this
 try:
     config.read_file(open('config.ini'))
 except FileNotFoundError:
