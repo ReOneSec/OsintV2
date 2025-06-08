@@ -23,41 +23,27 @@ client = pymongo.MongoClient(CONNECTION_STRING)
 db = client.get_database("bot_db")
 users_collection = db.get_collection("users")
 api_keys_collection = db.get_collection("api_keys")
+stats_collection = db.get_collection("bot_stats") # New collection for stats
 
+# --- User Subscription Functions ---
 def add_or_update_user(user_id: int, expiry_date: datetime, plan_type: str):
-    """
-    Adds a new user or updates an existing one, setting their plan type and expiry date.
-    """
     users_collection.update_one(
         {"_id": user_id},
-        {
-            "$set": {
-                "expiry_date": expiry_date,
-                "plan_type": plan_type
-            }
-        },
+        {"$set": {"expiry_date": expiry_date, "plan_type": plan_type}},
         upsert=True
     )
 
 def get_user_subscription(user_id: int) -> dict | None:
-    """
-    Retrieves a user's full subscription details (plan_type, expiry_date).
-    Returns a dictionary or None if the user is not found.
-    """
     return users_collection.find_one({"_id": user_id})
 
-
 def get_all_active_users() -> list[int]:
-    """
-    Retrieves a list of all user IDs with an active, non-expired subscription.
-    """
     active_user_docs = users_collection.find(
         {"expiry_date": {"$gt": datetime.now()}},
-        {"_id": 1} # Only return the _id field
+        {"_id": 1}
     )
     return [doc["_id"] for doc in active_user_docs]
 
-# (add_api_keys and get_api_keys functions remain unchanged)
+# --- API Key Functions ---
 def add_api_keys(keys_to_add: list[str]) -> int:
     if not keys_to_add: return 0
     api_keys_collection.update_one(
@@ -69,7 +55,23 @@ def add_api_keys(keys_to_add: list[str]) -> int:
 
 def get_api_keys() -> list[str]:
     key_document = api_keys_collection.find_one({"_id": "key_pool"})
-    if key_document and "keys" in key_document:
-        return key_document["keys"]
-    return []
+    return key_document.get("keys", []) if key_document else []
+
+### --- NEW STATISTICS FUNCTIONS --- ###
+def get_total_user_count() -> int:
+    """Counts all documents in the users collection."""
+    return users_collection.count_documents({})
+
+def get_total_requests() -> int:
+    """Gets the total number of requests from the stats collection."""
+    stats_doc = stats_collection.find_one({"_id": "global_stats"})
+    return stats_doc.get("total_requests", 0) if stats_doc else 0
+
+def increment_total_requests():
+    """Increments the total request counter by 1."""
+    stats_collection.update_one(
+        {"_id": "global_stats"},
+        {"$inc": {"total_requests": 1}},
+        upsert=True
+    )
     
