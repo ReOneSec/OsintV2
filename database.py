@@ -2,11 +2,21 @@
 import pymongo
 import configparser
 from datetime import datetime
+from urllib.parse import quote_plus # Import the required function
 
 # --- CONFIGURATION ---
-config = configparser.ConfigParser(interpolation=None) # <-- Add this
+config = configparser.ConfigParser(interpolation=None) # Keep interpolation=None
 config.read_file(open('config.ini'))
-CONNECTION_STRING = config['MONGODB']['CONNECTION_STRING']
+
+# --- Read separate credentials from config ---
+DB_USERNAME = config['MONGODB']['DB_USERNAME']
+DB_PASSWORD = config['MONGODB']['DB_PASSWORD']
+CLUSTER_URL = config['MONGODB']['CLUSTER_URL']
+
+# --- Escape username and password and build the final connection string ---
+ESCAPED_USERNAME = quote_plus(DB_USERNAME)
+ESCAPED_PASSWORD = quote_plus(DB_PASSWORD)
+CONNECTION_STRING = f"mongodb+srv://{ESCAPED_USERNAME}:{ESCAPED_PASSWORD}@{CLUSTER_URL}/?retryWrites=true&w=majority"
 
 # --- MONGODB CLIENT SETUP ---
 client = pymongo.MongoClient(CONNECTION_STRING)
@@ -60,11 +70,8 @@ def add_api_keys(keys_to_add: list[str]) -> int:
         },
         upsert=True
     )
-    # result.modified_count will be 1 if new keys were added, 0 otherwise.
-    # result.upserted_id will be non-None if the document was created for the first time.
-    # A more reliable way is to count before/after, but this is simpler for this context.
-    # For now, we will assume success means they are available.
-    return len(keys_to_add) # This is a simplification, assumes all are new. A more complex check is possible.
+    # This is a simplification, but effective for this use case.
+    return len(keys_to_add)
 
 
 def get_api_keys() -> list[str]:
@@ -74,3 +81,4 @@ def get_api_keys() -> list[str]:
     if key_document and "keys" in key_document:
         return key_document["keys"]
     return []
+    
