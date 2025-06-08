@@ -4,7 +4,7 @@ import configparser
 from datetime import datetime
 
 # --- CONFIGURATION ---
-config = configparser.ConfigParser()
+config = configparser.ConfigParser(interpolation=None) # <-- Add this
 config.read_file(open('config.ini'))
 CONNECTION_STRING = config['MONGODB']['CONNECTION_STRING']
 
