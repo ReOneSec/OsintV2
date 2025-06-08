@@ -109,7 +109,8 @@ def send_welcome(message: Message):
     )
     bot.reply_to(message, welcome_text, parse_mode="html")
 
-### --- MODIFIED /help COMMAND --- ###
+
+### --- /help COMMAND --- ###
 @bot.message_handler(commands=["help"])
 def send_help(message: Message):
     """Shows a full list of commands, with special commands visible only to admins."""
@@ -124,19 +125,21 @@ def send_help(message: Message):
         "• `/status` - Check your subscription status and expiry date."
     )
 
-    # If the user is an admin, add the admin commands section
+    # If the user is an admin, add the admin commands section with escaped characters
     if user_id in ADMIN_IDS:
         admin_help_text = (
             "\n\n"
             "<b><u>Admin Commands</u></b>\n"
-            "• `/add <user_id> <days>` - Grant a user a premium subscription.\n"
-            "• `/trial <user_id> <hours>` - Grant a user a temporary trial.\n"
-            "• `/addapi <key1>,<key2>` - Add new API keys to the active pool.\n"
+            "• `/add &lt;user_id&gt; &lt;days&gt;` - Grant a user a premium subscription.\n"
+            "• `/trial &lt;user_id&gt; &lt;hours&gt;` - Grant a user a temporary trial.\n"
+            "• `/addapi &lt;key1&gt;,&lt;key2&gt;` - Add new API keys to the active pool.\n"
             "• `/broadcast` (as reply) - Send the replied-to message to all subscribers."
         )
         help_text += admin_help_text
 
     bot.reply_to(message, help_text, parse_mode="html")
+    
+    
 
 @bot.message_handler(commands=["status"])
 def check_status(message: Message):
