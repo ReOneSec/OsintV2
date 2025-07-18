@@ -25,6 +25,7 @@ An advanced, feature-rich Python Telegram bot that serves as a secure and scalab
 
 -   `/add <user_id> <days>`: Grants a subscription to a user for a specified number of days.
 -   `/addapi <key1>,<key2>,...`: Adds one or more LeakOsint API keys to the active pool.
+-   `/viewapi`: View Or Delete Stored LeakOsint API keys from the active pool.
 -   `/broadcast` (as a reply): Broadcasts the replied-to message to all active subscribers.
 
 ## Setup and Installation
