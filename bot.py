@@ -12,11 +12,13 @@ from cachetools import TTLCache
 
 import database
 from api_manager import ApiKeyManager
+from telegram_handler import TelegramHandler # NEW IMPORT
 
 # --- CONFIGURATION AND LOGGING SETUP ---
 config = configparser.ConfigParser(interpolation=None)
 config.read_file(open('config.ini'))
 
+# Basic console and file logging setup (keep this)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', handlers=[logging.FileHandler("bot.log"), logging.StreamHandler()])
 logger = logging.getLogger(__name__)
 
@@ -27,11 +29,21 @@ try:
     LANG = config['LEAKOSINT'].get('LANG', 'ru')
     LIMIT = config['LEAKOSINT'].getint('LIMIT', 300)
     ADMIN_IDS = {int(admin_id.strip()) for admin_id in config['ADMIN']['ADMIN_IDS'].split(',')}
+    LOG_CHANNEL_ID = config['ADMIN']['LOG_CHANNEL_ID'] # Ensure this is in config.ini
     if not ADMIN_IDS:
         logger.warning("ADMIN_IDS not configured. Admin commands will not be available.")
 except KeyError as e:
     logger.fatal(f"Configuration Error: Missing section or key in config.ini: {e}")
     exit(1)
+
+# --- Add Telegram logging handler ---
+try:
+    # This handler will send messages of ERROR level or higher to the specified Telegram chat
+    telegram_log_handler = TelegramHandler(BOT_TOKEN, LOG_CHANNEL_ID, logging.ERROR)
+    logger.addHandler(telegram_log_handler)
+    logger.info("Telegram logging handler initialized for ERROR level messages.")
+except Exception as e:
+    logger.error(f"Failed to initialize Telegram logging handler: {e}")
 
 # --- INITIALIZATION ---
 BOT_START_TIME = datetime.now()
@@ -503,6 +515,14 @@ def callback_handler(call: CallbackQuery):
 
 if __name__ == '__main__':
     logger.info("Bot starting with all systems enabled...")
+    # Send a startup notification to Telegram if the handler is active
+    try:
+        if 'telegram_log_handler' in locals() and telegram_log_handler.level <= logging.INFO:
+            bot.send_message(LOG_CHANNEL_ID, "✅ Bot has started successfully!", parse_mode="Markdown")
+            logger.info("Sent bot startup notification to Telegram.")
+    except Exception as e:
+        logger.warning(f"Could not send bot startup notification to Telegram: {e}")
+
     while True:
         try:
             bot.polling(non_stop=True, interval=0)
