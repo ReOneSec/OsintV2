@@ -18,7 +18,7 @@ config = configparser.ConfigParser(interpolation=None)
 config.read_file(open('config.ini'))
 
 # Configure logging: INFO level for general operation, DEBUG for detailed troubleshooting.
-# You can change logging.INFO to logging.DEBUG for more verbose output during debugging.
+# For debugging this issue, temporarily set logging.INFO to logging.DEBUG here:
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', handlers=[logging.FileHandler("bot.log"), logging.StreamHandler()])
 logger = logging.getLogger(__name__)
 
@@ -29,42 +29,36 @@ try:
     LANG = config['LEAKOSINT'].get('LANG', 'ru')
     LIMIT = config['LEAKOSINT'].getint('LIMIT', 300)
     ADMIN_IDS = {int(admin_id.strip()) for admin_id in config['ADMIN']['ADMIN_IDS'].split(',')}
-    # Ensure ADMIN_IDS is not empty if it's critical for bot operation
     if not ADMIN_IDS:
         logger.warning("ADMIN_IDS not configured. Admin commands will not be available.")
 except KeyError as e:
     logger.fatal(f"Configuration Error: Missing section or key in config.ini: {e}")
-    exit(1) # Exit if essential configuration is missing
+    exit(1)
 
 # --- INITIALIZATION ---
-BOT_START_TIME = datetime.now() # Record bot start time
+BOT_START_TIME = datetime.now()
 bot = telebot.TeleBot(BOT_TOKEN)
-key_manager = ApiKeyManager() # Initializes and loads keys from DB
-cash_reports = TTLCache(maxsize=500, ttl=3600) # Cache for search reports
-user_timestamps = {} # For cooldown tracking
+key_manager = ApiKeyManager()
+cash_reports = TTLCache(maxsize=500, ttl=3600)
+user_timestamps = {}
 
 # --- CONSTANTS ---
 CALLBACK_PREFIX_PAGE = "/page "
 CALLBACK_DELETE = "/delete"
-CALLBACK_DELETE_API_KEY_PREFIX = "/delapi " # New constant for API key deletion
-PREMIUM_COOLDOWN = 3 # Cooldown in seconds for premium users
-TRIAL_COOLDOWN = 1800 # Cooldown in seconds (30 minutes) for trial users
-MAX_MESSAGE_LENGTH = 4096 # Telegram's message character limit
-BROADCAST_SLEEP_TIME = 0.1 # Delay between sending broadcast messages
+CALLBACK_DELETE_API_KEY_PREFIX = "/delapi "
+PREMIUM_COOLDOWN = 3
+TRIAL_COOLDOWN = 1800
+MAX_MESSAGE_LENGTH = 4096
+BROADCAST_SLEEP_TIME = 0.1
 
 # --- HELPER FUNCTIONS ---
 def format_uptime(duration: timedelta) -> str:
-    """Formats a timedelta duration into a human-readable string."""
     days, remainder = divmod(duration.total_seconds(), 86400)
     hours, remainder = divmod(remainder, 3600)
     minutes, seconds = divmod(remainder, 60)
     return f"{int(days)}d, {int(hours)}h, {int(minutes)}m"
 
 def generate_report(query: str, query_id: int) -> tuple[list | None, str | None]:
-    """
-    Makes a request to the LeakOsint API and formats the response into report pages.
-    Returns a list of formatted report pages or None and an error message.
-    """
     api_key_to_use = key_manager.get_next_key()
     if not api_key_to_use:
         logger.warning("No API keys available for search query.")
@@ -75,7 +69,7 @@ def generate_report(query: str, query_id: int) -> tuple[list | None, str | None]
     data = {"token": api_key_to_use, "request": query.split("\n")[0], "limit": LIMIT, "lang": LANG}
     try:
         response = requests.post(API_URL, json=data, timeout=30)
-        response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
+        response.raise_for_status()
         response_json = response.json()
     except requests.exceptions.Timeout:
         logger.error(f"API request timed out for query '{query[:50]}...'.")
@@ -97,22 +91,21 @@ def generate_report(query: str, query_id: int) -> tuple[list | None, str | None]
     
     if not response_json.get("List"):
         logger.info(f"No results found for query '{query[:50]}...'.")
-        return [], None # No results, but no error
+        return [], None
 
     report_pages = []
     for database_name, details in response_json["List"].items():
         text_parts = [f"<b>{database_name}</b>", ""]
-        text_parts.append(details.get("InfoLeak", "") + "\n") # Adding InfoLeak
+        text_parts.append(details.get("InfoLeak", "") + "\n")
         
         if "Data" in details:
             for report_data in details["Data"]:
                 for column_name, value in report_data.items():
                     text_parts.append(f"<b>{column_name}</b>:  {value}")
-                text_parts.append("") # Add a blank line between data entries
+                text_parts.append("")
         
         full_text = "\n".join(text_parts)
         
-        # Truncate if message exceeds Telegram's limit
         if len(full_text) > MAX_MESSAGE_LENGTH:
             full_text = full_text[:MAX_MESSAGE_LENGTH - 100] + "\n\n[...Message truncated...]"
             logger.warning(f"Truncated message for query '{query[:50]}...' due to length.")
@@ -126,36 +119,33 @@ def generate_report(query: str, query_id: int) -> tuple[list | None, str | None]
     return report_pages, None
 
 def create_inline_keyboard(query_id: int, page_id: int, count_page: int) -> InlineKeyboardMarkup:
-    """Creates an inline keyboard for navigating search results."""
     markup = InlineKeyboardMarkup()
     if count_page > 1:
         prev_page = page_id - 1 if page_id > 0 else count_page - 1
         next_page = page_id + 1 if page_id < count_page - 1 else 0
         markup.row(
             InlineKeyboardButton(text="<<", callback_data=f"{CALLBACK_PREFIX_PAGE}{query_id} {prev_page}"),
-            InlineKeyboardButton(text=f"{page_id + 1}/{count_page}", callback_data="no_action"), # no_action prevents callback on page count
+            InlineKeyboardButton(text=f"{page_id + 1}/{count_page}", callback_data="no_action"),
             InlineKeyboardButton(text=">>", callback_data=f"{CALLBACK_PREFIX_PAGE}{query_id} {next_page}")
         )
     markup.row(InlineKeyboardButton(text="🗑️ Delete", callback_data=CALLBACK_DELETE))
     return markup
 
 def create_api_key_keyboard(api_keys: list[str]) -> InlineKeyboardMarkup:
-    """Creates an inline keyboard with buttons to delete specific API keys."""
     markup = InlineKeyboardMarkup()
     if not api_keys:
-        return markup # Return empty markup if no keys
+        return markup
 
     for key in api_keys:
-        # For display, only show the last 8 characters of the key
         display_key = f"...{key[-8:]}" if len(key) > 8 else key
         markup.add(InlineKeyboardButton(text=f"Delete Key: {display_key}", callback_data=f"{CALLBACK_DELETE_API_KEY_PREFIX}{key}"))
     return markup
 
 
 # --- TELEGRAM BOT HANDLERS ---
+
 @bot.message_handler(commands=["start"])
 def send_welcome(message: Message):
-    """Handles the /start command."""
     welcome_text = (
         "<b>Welcome to the LeakOsint Bot!</b>\n\n"
         "To see a list of available commands, please use /help."
@@ -165,7 +155,6 @@ def send_welcome(message: Message):
 
 @bot.message_handler(commands=["help"])
 def send_help(message: Message):
-    """Handles the /help command, showing user and admin commands."""
     user_id = message.from_user.id
     help_text = (
         "<b>Here is a list of available commands:</b>\n\n"
@@ -191,7 +180,6 @@ def send_help(message: Message):
 
 @bot.message_handler(commands=["status"])
 def check_status(message: Message):
-    """Handles the /status command to check user subscription."""
     user_id = message.from_user.id
     subscription_info = database.get_user_subscription(user_id)
     if subscription_info and subscription_info.get("expiry_date") and subscription_info["expiry_date"] > datetime.now():
@@ -206,13 +194,12 @@ def check_status(message: Message):
 
 @bot.message_handler(commands=['stat'])
 def send_stats(message: Message):
-    """Handles the /stat command to display bot usage statistics (admin only)."""
     admin_id = message.from_user.id
     logger.debug(f"Received /stat command from user ID {admin_id}")
 
     if admin_id not in ADMIN_IDS:
         logger.warning(f"Unauthorized access attempt by user ID {admin_id} for /stat.")
-        bot.reply_to(message, "🚫 You are not authorized to use this command.") # Optional: give feedback
+        bot.reply_to(message, "🚫 You are not authorized to use this command.")
         return
     
     total_users = database.get_total_user_count()
@@ -232,9 +219,42 @@ def send_stats(message: Message):
     logger.info(f"Admin {admin_id} viewed bot statistics.")
 
 
-@bot.message_handler(commands=["add", "trial", "addapi", "broadcast", "viewapi"])
-def handle_admin_commands(message: Message):
-    """Handles various admin-only commands."""
+# Dedicated handler for /viewapi to ensure it's caught as a command
+@bot.message_handler(commands=["viewapi"])
+def view_api_keys_command(message: Message):
+    admin_id = message.from_user.id
+    logger.debug(f"Received /viewapi command from user ID {admin_id}")
+
+    if admin_id not in ADMIN_IDS:
+        logger.warning(f"Unauthorized access attempt by user ID {admin_id} for /viewapi.")
+        bot.reply_to(message, "🚫 You are not authorized to use this command.")
+        return
+    
+    logger.info(f"Admin {admin_id} requested /viewapi.")
+    api_keys = database.get_api_keys()
+    logger.debug(f"Fetched API keys for /viewapi: {len(api_keys)} keys found.")
+    
+    if not api_keys:
+        bot.reply_to(message, "ℹ️ No API keys currently stored.")
+        logger.info(f"No API keys found for /viewapi request from {admin_id}.")
+        return
+
+    response_text = "<b>Current API Keys:</b>\n\n"
+    for i, key in enumerate(api_keys):
+        response_text += f"{i+1}. `{key}`\n"
+    
+    markup = create_api_key_keyboard(api_keys)
+    try:
+        bot.reply_to(message, response_text, parse_mode="html", reply_markup=markup)
+        logger.info(f"Sent API key list to admin {admin_id}.")
+    except ApiTelegramException as e:
+        logger.error(f"Failed to send API key list to admin {admin_id}: {e}")
+        bot.reply_to(message, "⚠️ An error occurred while sending the key list. Please check logs.")
+
+
+# Handler for other admin commands that remain grouped
+@bot.message_handler(commands=["add", "trial", "addapi", "broadcast"])
+def handle_other_admin_commands(message: Message):
     admin_id = message.from_user.id
     logger.debug(f"Received admin command '{message.text}' from user ID {admin_id}")
 
@@ -243,12 +263,12 @@ def handle_admin_commands(message: Message):
         bot.reply_to(message, "🚫 You are not authorized to use this command.")
         return
     
-    command = message.text.split()[0].lower() # Convert to lowercase for consistent matching
+    command = message.text.split()[0].lower()
     logger.info(f"Admin {admin_id} is executing command: {command}")
     
     if command == '/add':
         try:
-            parts = message.text.split(); 
+            parts = message.text.split()
             user_id_to_add = int(parts[1])
             days = int(parts[2])
             expiry_date = datetime.now() + timedelta(days=days)
@@ -266,7 +286,7 @@ def handle_admin_commands(message: Message):
 
     elif command == '/trial':
         try:
-            parts = message.text.split(); 
+            parts = message.text.split()
             user_id_to_add = int(parts[1])
             hours = int(parts[2])
             expiry_date = datetime.now() + timedelta(hours=hours)
@@ -296,29 +316,6 @@ def handle_admin_commands(message: Message):
             bot.reply_to(message, "⚠️ **Usage:** `/addapi <key1>,<key2>,...` (Error: " + str(e) + ")")
             logger.warning(f"Admin {admin_id} used invalid format for /addapi: {message.text}. Error: {e}")
 
-    elif command == '/viewapi':
-        logger.info(f"Admin {admin_id} requested /viewapi.")
-        api_keys = database.get_api_keys()
-        logger.debug(f"Fetched API keys for /viewapi: {len(api_keys)} keys found.") # Log count, not actual keys
-        
-        if not api_keys:
-            bot.reply_to(message, "ℹ️ No API keys currently stored.")
-            logger.info(f"No API keys found for /viewapi request from {admin_id}.")
-            return
-
-        response_text = "<b>Current API Keys:</b>\n\n"
-        # Display full key to admin here. If you prefer masked, change `key` to `display_key`
-        for i, key in enumerate(api_keys):
-            response_text += f"{i+1}. `{key}`\n" 
-        
-        markup = create_api_key_keyboard(api_keys)
-        try:
-            bot.reply_to(message, response_text, parse_mode="html", reply_markup=markup)
-            logger.info(f"Sent API key list to admin {admin_id}.")
-        except ApiTelegramException as e:
-            logger.error(f"Failed to send API key list to admin {admin_id}: {e}")
-            bot.reply_to(message, "⚠️ An error occurred while sending the key list. Please check logs.")
-
     elif command == '/broadcast':
         if not message.reply_to_message:
             bot.reply_to(message, "⚠️ **Usage:** Reply to a message with `/broadcast`.")
@@ -341,15 +338,16 @@ def handle_admin_commands(message: Message):
             except ApiTelegramException as e:
                 fail_count += 1
                 logger.warning(f"Failed to send broadcast to user {user_id}: {e}")
-            time.sleep(BROADCAST_SLEEP_TIME) # Small delay to avoid hitting Telegram API limits
+            time.sleep(BROADCAST_SLEEP_TIME)
         
         final_report = f"Broadcast complete!\n\n✅ Sent: {success_count}\n❌ Failed: {fail_count}"
         bot.send_message(admin_id, final_report)
         logger.info(f"Broadcast from admin {admin_id} finished. Sent: {success_count}, Failed: {fail_count}.")
 
+
+# This general text handler MUST be defined AFTER all specific command handlers
 @bot.message_handler(content_types=['text'])
 def handle_message(message: Message):
-    """Handles incoming text messages for search queries."""
     user_id = message.from_user.id
     logger.info(f"Received text message from user {user_id}: '{message.text[:50]}...'")
 
@@ -359,7 +357,7 @@ def handle_message(message: Message):
         logger.info(f"Blocked user {user_id} due to expired/missing subscription.")
         return
     
-    plan_type = subscription_info.get("plan_type", "premium") # Default to premium if not specified
+    plan_type = subscription_info.get("plan_type", "premium")
     cooldown = TRIAL_COOLDOWN if plan_type == 'trial' else PREMIUM_COOLDOWN
     current_time = time.time()
 
@@ -373,18 +371,16 @@ def handle_message(message: Message):
             logger.info(f"Blocked premium user {user_id} due to cooldown. Time left: {round(time_left)} sec.")
         return
     
-    user_timestamps[user_id] = current_time # Update timestamp after successful check
+    user_timestamps[user_id] = current_time
     
-    # Increment total requests counter in the database
     database.increment_total_requests()
     logger.debug(f"Incremented total requests. User {user_id} made a request.")
     
-    query_id = randint(0, 9_999_999) # Generate a unique ID for this query's report pages
+    query_id = randint(0, 9_999_999)
     wait_message = bot.reply_to(message, "⏳ Searching, please wait...")
     
     report_pages, error = generate_report(message.text, query_id)
     
-     # Delete the "searching" message
     try:
         bot.delete_message(chat_id=message.chat.id, message_id=wait_message.message_id)
     except ApiTelegramException as e:
@@ -402,15 +398,13 @@ def handle_message(message: Message):
             bot.send_message(message.chat.id, report_pages[0], parse_mode="html", reply_markup=markup)
             logger.info(f"Sent {len(report_pages)} report pages to user {user_id} for query '{message.text[:50]}...'.")
         except ApiTelegramException as e:
-            # Fallback to plain text if HTML parsing fails (e.g., malformed HTML from API response)
             logger.warning(f"Failed to send HTML formatted message to user {message.chat.id} ({message.message_id}): {e}. Sending as plain text.")
-            plain_text = report_pages[0].replace("<b>", "").replace("</b>", "") # Remove bold tags
+            plain_text = report_pages[0].replace("<b>", "").replace("</b>", "")
             bot.send_message(message.chat.id, text=plain_text, reply_markup=markup)
 
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call: CallbackQuery):
-    """Handles all inline keyboard callback queries."""
     logger.debug(f"Callback received: {call.data} from user {call.from_user.id}")
 
     if call.data.startswith(CALLBACK_PREFIX_PAGE):
@@ -432,9 +426,7 @@ def callback_handler(call: CallbackQuery):
             return
         
         report_pages = cash_reports[query_id_str]
-        
-        # Ensure page_id is within bounds, especially if cycling logic results in out-of-bounds numbers
-        page_id = page_id % len(report_pages) # Wrap around for cycling pages
+        page_id = page_id % len(report_pages)
         
         markup = create_inline_keyboard(query_id_str, page_id, len(report_pages))
         try: 
@@ -443,16 +435,16 @@ def callback_handler(call: CallbackQuery):
                                   message_id=call.message.message_id, 
                                   parse_mode="html", 
                                   reply_markup=markup)
-            bot.answer_callback_query(call.id) # Acknowledge the callback
+            bot.answer_callback_query(call.id)
             logger.info(f"User {call.from_user.id} navigated to page {page_id} for query {query_id_str}.")
         except ApiTelegramException as e: 
             logger.warning(f"Failed to edit message for pagination (user {call.from_user.id}, message {call.message.message_id}): {e}")
-            bot.answer_callback_query(call.id, "Could not update page. Try again.") # Acknowledge with an error message
+            bot.answer_callback_query(call.id, "Could not update page. Try again.")
     
     elif call.data == CALLBACK_DELETE:
         try: 
             bot.delete_message(chat_id=call.message.chat.id, message_id=call.message.message_id)
-            bot.answer_callback_query(call.id, "Message deleted.") # Acknowledge the callback
+            bot.answer_callback_query(call.id, "Message deleted.")
             logger.info(f"User {call.from_user.id} deleted message {call.message.message_id}.")
         except ApiTelegramException as e: 
             logger.warning(f"Failed to delete message {call.message.message_id} for user {call.from_user.id}: {e}")
@@ -466,19 +458,17 @@ def callback_handler(call: CallbackQuery):
 
         api_key_to_delete = call.data.split(CALLBACK_DELETE_API_KEY_PREFIX, 1)[1]
         
-        # Display a "Processing..." message to the admin
         bot.edit_message_text(
             f"⏳ Processing deletion for key `...{api_key_to_delete[-8:]}`...",
             chat_id=call.message.chat.id,
             message_id=call.message.message_id,
             parse_mode="Markdown"
         )
-        bot.answer_callback_query(call.id, "Deleting key...") # Acknowledge immediately
+        bot.answer_callback_query(call.id, "Deleting key...")
 
         if key_manager.delete_key(api_key_to_delete):
             logger.info(f"Admin {call.from_user.id} successfully deleted API key ending in '...{api_key_to_delete[-8:]}'.")
             
-            # Re-fetch keys and update the message with the new list and buttons
             updated_api_keys = database.get_api_keys()
             if updated_api_keys:
                 response_text = "<b>Current API Keys:</b>\n\n"
@@ -499,10 +489,10 @@ def callback_handler(call: CallbackQuery):
                     chat_id=call.message.chat.id,
                     message_id=call.message.message_id,
                     parse_mode="Markdown",
-                    reply_markup=None # No keys, so no more delete buttons
+                    reply_markup=None
                 )
         else:
-            logger.error(f"Failed to delete API key ending in '...{api_key_to_delete[-8:]}' for admin {call.from_user.id}.")
+            logger.error(f"Failed to delete API key ending in '...{api_key_to_delete[-8:]}' for admin {call.from_user.id}. Key not found or DB error.")
             bot.edit_message_text(
                 f"❌ Failed to delete API key ending in `...{api_key_to_delete[-8:]}`. It might no longer exist or an error occurred.",
                 chat_id=call.message.chat.id,
@@ -511,16 +501,15 @@ def callback_handler(call: CallbackQuery):
             )
     
     elif call.data == "no_action":
-        # This is for buttons that do nothing, simply acknowledge to remove loading spinner.
         bot.answer_callback_query(call.id)
 
 if __name__ == '__main__':
     logger.info("Bot starting with all systems enabled...")
-    # This loop ensures the bot keeps polling even if an unexpected error occurs
     while True:
         try:
             bot.polling(non_stop=True, interval=0)
         except Exception as e:
             logger.critical(f"An unhandled exception occurred in the polling loop: {e}", exc_info=True)
             logger.info("Restarting bot polling in 5 seconds...")
-            time.sleep(5) # Wait before attempting to restart polling
+            time.sleep(5)
+            
