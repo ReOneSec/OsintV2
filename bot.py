@@ -17,8 +17,6 @@ from api_manager import ApiKeyManager
 config = configparser.ConfigParser(interpolation=None)
 config.read_file(open('config.ini'))
 
-# Configure logging: INFO level for general operation, DEBUG for detailed troubleshooting.
-# For debugging this issue, temporarily set logging.INFO to logging.DEBUG here:
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', handlers=[logging.FileHandler("bot.log"), logging.StreamHandler()])
 logger = logging.getLogger(__name__)
 
@@ -168,10 +166,10 @@ def send_help(message: Message):
             "\n\n"
             "<b><u>Admin Commands</u></b>\n"
             "• `/stat` - View bot usage statistics.\n"
-            "• `/add <user_id> <days>` - Grant a premium subscription.\n"
-            "• `/trial <user_id> <hours>` - Grant a temporary trial.\n"
-            "• `/addapi <key1>,<key2>` - Add new API keys.\n"
-            "• `/viewapi` - View and manage current API keys.\n"
+            "• `/add &lt;user_id&gt; &lt;days&gt;` - Grant a premium subscription.\n"
+            "• `/trial &lt;user_id&gt; &lt;hours&gt;` - Grant a temporary trial.\n"
+            "• `/addapi &lt;key1&gt;,&lt;key2&gt;` - Add new API keys.\n"
+            "• `/viewapi` - View and manage current API keys.\n" # Added to help section
             "• `/broadcast` (as reply) - Send a message to all subscribers."
         )
         help_text += admin_help_text
@@ -512,4 +510,3 @@ if __name__ == '__main__':
             logger.critical(f"An unhandled exception occurred in the polling loop: {e}", exc_info=True)
             logger.info("Restarting bot polling in 5 seconds...")
             time.sleep(5)
-            
